@@ -23,25 +23,31 @@ def scrape(self):
     soup = BeautifulSoup(response.content, 'html.parser')
 
     articles = []
-    entries = soup.find_all('dt')
-    descriptions = soup.find_all('dd')
+    all_entries = soup.select('dl > dt')
+    all_descriptions = soup.select('dl > dd')
 
-    for dt, dd in zip(entries, descriptions):
-        title_tag = dd.select_one('div.list-title.mathjax')
-        abstract_tag = dd.select_one('p')
-        link_tag = dt.select_one('a[href^="/abs/"]')
+    for dt, dd in zip(all_entries, all_descriptions):
+        # Get article ID (used to build full URL)
+        id_tag = dt.find('a', title='Abstract')
+        if not id_tag:
+            continue
 
-        if not title_tag or not abstract_tag or not link_tag:
+        relative_link = id_tag['href']
+        full_url = self.base_url + relative_link
+
+        title_tag = dd.find('div', class_='list-title mathjax')
+        abstract_tag = dd.find('p')
+
+        if not title_tag or not abstract_tag:
             continue
 
         title = title_tag.text.replace('Title:', '').strip()
         abstract = abstract_tag.text.strip()
-        url = self.base_url + link_tag['href']
 
         articles.append({
             'title': title,
             'abstract': abstract,
-            'url': url,
+            'url': full_url,
             'journal': 'arXiv cs.AI'
         })
 
