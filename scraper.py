@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import json
 import requests
@@ -9,73 +11,55 @@ class ArticleScraper:
     def __init__(self):
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
         self.headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/114.0.0.0 Safari/537.36'
-            ),
-            'Referer': 'https://www.cell.com/'
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36'
         }
-
-        self.journals = [
-            {
-                'name': 'iScience',
-                'url': 'https://www.cell.com/iscience/latest-content',
-                'title_selector': 'h3.toc__item__title a',
-                'link_attr': 'href',
-                'abstract_selector': 'section.abstract > p'
-            }
-        ]
+        self.journal_url = 'https://arxiv.org/list/cs.AI/recent'
+        self.base_url = 'https://arxiv.org'
 
     def scrape(self):
-        all_articles = []
-        for journal in self.journals:
-            print(f"Scraping: {journal['name']}")
-            try:
-                res = requests.get(journal['url'], headers=self.headers)
-                res.raise_for_status()
-                soup = BeautifulSoup(res.content, 'lxml')
+        print("🔍 Scraping arXiv...")
+        response = requests.get(self.journal_url, headers=self.headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
 
-                article_links = soup.select(journal['title_selector'])
+        articles = []
+        entries = soup.select('dl > dt')
+        descriptions = soup.select('dl > dd')
 
-                for tag in article_links[:10]:  # limit to 10
-                    title = tag.get_text(strip=True)
-                    link = tag.get(journal['link_attr'])
-                    full_url = link if link.startswith('http') else f"https://www.cell.com{link}"
+        for i in range(min(10, len(entries))):  # Limit to 10
+            title_tag = descriptions[i].select_one('div.list-title.mathjax')
+            abstract_tag = descriptions[i].select_one('p')
+            link_tag = entries[i].select_one('a[href^="/abs/"]')
 
-                    abstract = self.fetch_abstract(full_url, journal['abstract_selector'])
+            if not title_tag or not abstract_tag or not link_tag:
+                continue
 
-                    all_articles.append({
-                        'journal': journal['name'],
-                        'title': title,
-                        'url': full_url,
-                        'abstract': abstract
-                    })
+            title = title_tag.text.replace('Title:', '').strip()
+            abstract = abstract_tag.text.strip()
+            url = self.base_url + link_tag['href']
 
-                    time.sleep(1)
-            except Exception as e:
-                print(f"Failed to scrape {journal['name']}: {e}")
-        return all_articles
+            articles.append({
+                'title': title,
+                'abstract': abstract,
+                'url': url,
+                'journal': 'arXiv cs.AI'
+            })
 
-    def fetch_abstract(self, url, selector):
-        try:
-            res = requests.get(url, headers=self.headers)
-            res.raise_for_status()
-            soup = BeautifulSoup(res.content, 'lxml')
-            tag = soup.select_one(selector)
-            return tag.get_text(strip=True) if tag else "Abstract not found"
-        except Exception as e:
-            print(f"Error fetching abstract from {url}: {e}")
-            return "Abstract not found"
+        print(f"✅ Found {len(articles)} articles.")
+        return articles
 
     def summarize_with_chatgpt(self, articles):
         if not self.openai_api_key:
             print("No OpenAI API key found. Skipping summarization.")
             return articles
 
-        summarized_articles = []
+        summarized = []
         for article in articles:
-            prompt = f"""Summarize the following research abstract in 2-3 sentences, highlighting the main findings and significance:\n\nTitle: {article['title']}\n\nAbstract: {article['abstract']}\n\nSummary:"""
+            prompt = (
+                f"Summarize the following AI research abstract in 2-3 sentences, highlighting the key findings and impact:\n\n"
+                f"Title: {article['title']}\n\n"
+                f"Abstract: {article['abstract']}\n\nSummary:"
+            )
 
             try:
                 response = requests.post(
@@ -97,16 +81,17 @@ class ArticleScraper:
                     summary = result['choices'][0]['message']['content'].strip()
                     article['ai_summary'] = summary
                 else:
-                    print(f"API error ({response.status_code}): {response.text}")
+                    print(f"OpenAI API error: {response.status_code} - {response.text}")
                     article['ai_summary'] = "Summary unavailable"
+
             except Exception as e:
-                print(f"Error summarizing article '{article['title']}': {e}")
+                print(f"Error summarizing: {e}")
                 article['ai_summary'] = "Summary unavailable"
 
-            summarized_articles.append(article)
+            summarized.append(article)
             time.sleep(1)
 
-        return summarized_articles
+        return summarized
 
     def save_results(self, articles):
         os.makedirs('summaries', exist_ok=True)
@@ -118,28 +103,23 @@ class ArticleScraper:
             json.dump(articles, jf, indent=2, ensure_ascii=False)
 
         with open(md_path, 'w', encoding='utf-8') as mf:
-            mf.write(f"# Weekly Article Summary - {date_str}\n\n")
+            mf.write(f"# arXiv cs.AI Summary – {date_str}\n\n")
             for article in articles:
                 mf.write(f"## {article['title']}\n")
-                mf.write(f"**Journal:** {article['journal']}\n")
-                mf.write(f"**URL:** {article['url']}\n")
-                mf.write(f"**Abstract:** {article['abstract']}\n")
-                mf.write(f"**AI Summary:** {article.get('ai_summary', 'Not available')}\n")
-                mf.write("\n---\n\n")
+                mf.write(f"**URL:** {article['url']}\n\n")
+                mf.write(f"**Abstract:** {article['abstract']}\n\n")
+                mf.write(f"**AI Summary:** {article.get('ai_summary', 'Not available')}\n\n")
+                mf.write("---\n\n")
 
-        print(f"Saved {len(articles)} articles to: {json_path} and {md_path}")
+        print(f"💾 Saved to: {json_path} and {md_path}")
 
     def run(self):
-        print("🔍 Scraping articles...")
         articles = self.scrape()
         if not articles:
-            print("No articles found.")
+            print("No articles scraped.")
             return
 
-        print(f"🧠 Summarizing {len(articles)} articles with ChatGPT...")
         summarized = self.summarize_with_chatgpt(articles)
-
-        print("💾 Saving results...")
         self.save_results(summarized)
         print("✅ Done.")
 
