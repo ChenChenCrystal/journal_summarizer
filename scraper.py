@@ -20,7 +20,7 @@ class ArticleScraper:
         self.journals = [
             {
                 'name': 'iScience',
-                'url': 'https://www.cell.com/iscience/archive',
+                'url': 'https://www.cell.com/iscience/latest-content',
                 'title_selector': 'h3.toc__item__title a',
                 'link_attr': 'href',
                 'abstract_selector': 'section.abstract > p'
