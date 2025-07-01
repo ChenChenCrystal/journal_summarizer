@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-Article Scraper and Summarizer using ChatGPT API
-"""
-
 import os
 import json
 import requests
@@ -14,17 +9,21 @@ class ArticleScraper:
     def __init__(self):
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
         self.headers = {
-             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Referer': 'https://www.tandfonline.com/'
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/114.0.0.0 Safari/537.36'
+            ),
+            'Referer': 'https://www.cell.com/'
         }
 
         self.journals = [
             {
-                'name': 'Journal of Advertising',
-                'url': 'https://www.tandfonline.com/action/showAxaArticles?journalCode=ujoa20',
-                'title_selector': 'h5.issue-item__title a',
+                'name': 'iScience',
+                'url': 'https://www.cell.com/iscience/archive',
+                'title_selector': 'h3.toc__item__title a',
                 'link_attr': 'href',
-                'abstract_selector': 'div.abstractSection.abstractInFull'
+                'abstract_selector': 'section.abstract > p'
             }
         ]
 
@@ -42,7 +41,7 @@ class ArticleScraper:
                 for tag in article_links[:10]:  # limit to 10
                     title = tag.get_text(strip=True)
                     link = tag.get(journal['link_attr'])
-                    full_url = link if link.startswith('http') else f"https://www.tandfonline.com{link}"
+                    full_url = link if link.startswith('http') else f"https://www.cell.com{link}"
 
                     abstract = self.fetch_abstract(full_url, journal['abstract_selector'])
 
@@ -105,7 +104,7 @@ class ArticleScraper:
                 article['ai_summary'] = "Summary unavailable"
 
             summarized_articles.append(article)
-            time.sleep(1)  # Respect rate limits
+            time.sleep(1)
 
         return summarized_articles
 
