@@ -16,7 +16,7 @@ class ArticleScraper:
                 '(KHTML, like Gecko) Chrome/114.0 Safari/537.36'
             )
         }
-        self.journal_url = 'https://arxiv.org/list/cs.AI/recent'
+        self.journal_url = 'https://arxiv.org/list/cs.HC/recent'
         self.base_url = 'https://arxiv.org'
 
     def scrape(self):
@@ -49,7 +49,7 @@ class ArticleScraper:
                 'title': title,
                 'abstract': abstract,
                 'url': full_url,
-                'journal': 'arXiv cs.AI'
+                'journal': 'arXiv cs.HC'
             })
 
             time.sleep(1)
