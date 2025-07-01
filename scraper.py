@@ -16,37 +16,37 @@ class ArticleScraper:
         self.journal_url = 'https://arxiv.org/list/cs.AI/recent'
         self.base_url = 'https://arxiv.org'
 
-    def scrape(self):
-        print("🔍 Scraping arXiv...")
-        response = requests.get(self.journal_url, headers=self.headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+def scrape(self):
+    print("🔍 Scraping arXiv...")
+    response = requests.get(self.journal_url, headers=self.headers)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.content, 'html.parser')
 
-        articles = []
-        entries = soup.select('dl > dt')
-        descriptions = soup.select('dl > dd')
+    articles = []
+    entries = soup.find_all('dt')
+    descriptions = soup.find_all('dd')
 
-        for i in range(min(10, len(entries))):  # Limit to 10
-            title_tag = descriptions[i].select_one('div.list-title.mathjax')
-            abstract_tag = descriptions[i].select_one('p')
-            link_tag = entries[i].select_one('a[href^="/abs/"]')
+    for dt, dd in zip(entries, descriptions):
+        title_tag = dd.select_one('div.list-title.mathjax')
+        abstract_tag = dd.select_one('p')
+        link_tag = dt.select_one('a[href^="/abs/"]')
 
-            if not title_tag or not abstract_tag or not link_tag:
-                continue
+        if not title_tag or not abstract_tag or not link_tag:
+            continue
 
-            title = title_tag.text.replace('Title:', '').strip()
-            abstract = abstract_tag.text.strip()
-            url = self.base_url + link_tag['href']
+        title = title_tag.text.replace('Title:', '').strip()
+        abstract = abstract_tag.text.strip()
+        url = self.base_url + link_tag['href']
 
-            articles.append({
-                'title': title,
-                'abstract': abstract,
-                'url': url,
-                'journal': 'arXiv cs.AI'
-            })
+        articles.append({
+            'title': title,
+            'abstract': abstract,
+            'url': url,
+            'journal': 'arXiv cs.AI'
+        })
 
-        print(f"✅ Found {len(articles)} articles.")
-        return articles
+    print(f"✅ Found {len(articles)} articles.")
+    return articles
 
     def summarize_with_chatgpt(self, articles):
         if not self.openai_api_key:
