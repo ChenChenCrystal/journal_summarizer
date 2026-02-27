@@ -1,148 +1,200 @@
 #!/usr/bin/env python3
 
-import os
+import argparse
 import json
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
+import os
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from typing import Dict, List
+from xml.etree import ElementTree
 
-class ArticleScraper:
-    def __init__(self):
-        self.openai_api_key = os.getenv('OPENAI_API_KEY')
-        self.headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/114.0 Safari/537.36'
-            )
+
+class PaperCollector:
+    """Collect HCI/CMC + advertising/communication papers from compliant APIs."""
+
+    ARXIV_API = "https://export.arxiv.org/api/query"
+    ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+    def __init__(self, max_results: int = 30):
+        self.max_results = max_results
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.user_agent = (
+            "journal_summarizer/1.1 "
+            "(research automation; contact via repository owner)"
+        )
+        self.topics = [
+            "HCI",
+            "computer-mediated communication",
+            "advertising",
+            "marketing communication",
+            "attention",
+            "cognitive offloading",
+            "generative AI",
+            "virtual reality",
+        ]
+
+    def _http_get(self, url: str, params: Dict[str, str]) -> str:
+        query = urllib.parse.urlencode(params)
+        request = urllib.request.Request(
+            f"{url}?{query}", headers={"User-Agent": self.user_agent}, method="GET"
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8", errors="replace")
+
+    def _http_post_json(self, url: str, payload: Dict) -> Dict:
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self.openai_api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": self.user_agent,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=45) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+
+    def build_arxiv_query(self) -> str:
+        term_query = " OR ".join([f'all:"{term}"' for term in self.topics])
+        return f"(cat:cs.HC OR cat:cs.CY OR cat:cs.CL) AND ({term_query})"
+
+    def fetch_arxiv(self) -> List[Dict[str, str]]:
+        print("🔍 Collecting papers from arXiv API (no HTML scraping)...")
+        params = {
+            "search_query": self.build_arxiv_query(),
+            "start": 0,
+            "max_results": self.max_results,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
         }
-        self.journal_url = 'https://arxiv.org/list/cs.HC/recent'
-        self.base_url = 'https://arxiv.org'
 
-    def scrape(self):
-        print("🔍 Scraping arXiv...")
-        response = requests.get(self.journal_url, headers=self.headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+        response_text = self._http_get(self.ARXIV_API, params)
+        root = ElementTree.fromstring(response_text)
 
-        articles = []
-        all_entries = soup.select('dl > dt')
-        all_descriptions = soup.select('dl > dd')
-
-        for dt, dd in zip(all_entries, all_descriptions):
-            id_tag = dt.find('a', title='Abstract')
-            if not id_tag:
+        papers: List[Dict[str, str]] = []
+        for entry in root.findall("atom:entry", self.ARXIV_NS):
+            title = (entry.findtext("atom:title", default="", namespaces=self.ARXIV_NS)).strip()
+            abstract = (
+                entry.findtext("atom:summary", default="", namespaces=self.ARXIV_NS)
+            ).strip()
+            url = entry.findtext("atom:id", default="", namespaces=self.ARXIV_NS)
+            published = entry.findtext(
+                "atom:published", default="", namespaces=self.ARXIV_NS
+            )
+            if not title or not abstract or not url:
                 continue
 
-            relative_link = id_tag['href']
-            full_url = self.base_url + relative_link
+            papers.append(
+                {
+                    "title": " ".join(title.split()),
+                    "abstract": " ".join(abstract.split()),
+                    "url": url,
+                    "source": "arXiv",
+                    "published": published,
+                }
+            )
 
-            title_tag = dd.find('div', class_='list-title mathjax')
-            if not title_tag:
-                continue
-            title = title_tag.text.replace('Title:', '').strip()
+        print(f"✅ Found {len(papers)} papers.")
+        return papers
 
-            # 🔄 NEW: Fetch abstract from the article's detail page
-            abstract = self.fetch_abstract(full_url)
-
-            articles.append({
-                'title': title,
-                'abstract': abstract,
-                'url': full_url,
-                'journal': 'arXiv cs.HC'
-            })
-
-            time.sleep(1)
-
-        print(f"✅ Found {len(articles)} articles.")
-        return articles
-
-    def fetch_abstract(self, url):
-        try:
-            res = requests.get(url, headers=self.headers)
-            res.raise_for_status()
-            soup = BeautifulSoup(res.content, 'html.parser')
-            tag = soup.find('blockquote', class_='abstract')
-            return tag.text.replace('Abstract:', '').strip() if tag else "Abstract not found"
-        except Exception as e:
-            print(f"❌ Error fetching abstract from {url}: {e}")
-            return "Abstract not found"
-
-    def summarize_with_chatgpt(self, articles):
+    def summarize(self, papers: List[Dict[str, str]]) -> List[Dict[str, str]]:
         if not self.openai_api_key:
-            print("❌ No OpenAI API key found. Skipping summarization.")
-            return articles
+            print("⚠️ OPENAI_API_KEY not set; skipping AI summaries.")
+            return papers
 
         summarized = []
-        for article in articles:
+        for i, paper in enumerate(papers, start=1):
+            print(f"🧠 Summarizing {i}/{len(papers)}: {paper['title'][:80]}...")
             prompt = (
-                f"Summarize the following AI research abstract in 2-3 sentences, highlighting the key findings and significance:\n\n"
-                f"Title: {article['title']}\n\n"
-                f"Abstract: {article['abstract']}\n\nSummary:"
+                "You are helping with a daily research brief for HCI/CMC in "
+                "advertising and communication.\n"
+                "Summarize this paper in 3 concise bullet points covering: \n"
+                "1) research question/theory, 2) method/context, 3) practical "
+                "implications for communication/advertising.\n"
+                "Then add one line: 'Relevance tags:' with 2-4 tags chosen from "
+                "[attention, cognitive-offloading, genAI, VR, CMC, HCI, advertising].\n\n"
+                f"Title: {paper['title']}\n"
+                f"Abstract: {paper['abstract']}"
             )
 
-            try:
-                response = requests.post(
-                    'https://api.openai.com/v1/chat/completions',
-                    headers={
-                        'Authorization': f'Bearer {self.openai_api_key}',
-                        'Content-Type': 'application/json'
-                    },
-                    json={
-                        'model': 'gpt-3.5-turbo',
-                        'messages': [{'role': 'user', 'content': prompt}],
-                        'temperature': 0.5,
-                        'max_tokens': 300
-                    }
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    summary = result['choices'][0]['message']['content'].strip()
-                    article['ai_summary'] = summary
-                else:
-                    print(f"⚠️ OpenAI API error: {response.status_code} - {response.text}")
-                    article['ai_summary'] = "Summary unavailable"
-
-            except Exception as e:
-                print(f"❌ Error summarizing: {e}")
-                article['ai_summary'] = "Summary unavailable"
-
-            summarized.append(article)
-            time.sleep(1)
+            summary = self._call_openai(prompt)
+            paper["ai_summary"] = summary
+            summarized.append(paper)
+            time.sleep(0.3)
 
         return summarized
 
-    def save_results(self, articles):
-        os.makedirs('summaries', exist_ok=True)
-        date_str = datetime.now().strftime('%Y-%m-%d')
-        json_path = f'summaries/articles_{date_str}.json'
-        md_path = f'summaries/articles_{date_str}.md'
+    def _call_openai(self, prompt: str) -> str:
+        try:
+            payload = {
+                "model": self.openai_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 350,
+            }
+            response = self._http_post_json(
+                "https://api.openai.com/v1/chat/completions", payload
+            )
+            return response["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            print(f"❌ Summary error: {exc}")
+            return "Summary unavailable"
 
-        with open(json_path, 'w', encoding='utf-8') as jf:
-            json.dump(articles, jf, indent=2, ensure_ascii=False)
+    def save_results(self, papers: List[Dict[str, str]]) -> None:
+        os.makedirs("summaries", exist_ok=True)
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        json_path = f"summaries/articles_{date_str}.json"
+        md_path = f"summaries/articles_{date_str}.md"
 
-        with open(md_path, 'w', encoding='utf-8') as mf:
-            mf.write(f"# arXiv cs.AI Summary – {date_str}\n\n")
-            for article in articles:
-                mf.write(f"## {article['title']}\n")
-                mf.write(f"**URL:** {article['url']}\n\n")
-                mf.write(f"**Abstract:** {article['abstract']}\n\n")
-                mf.write(f"**AI Summary:** {article.get('ai_summary', 'Not available')}\n\n")
-                mf.write("---\n\n")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(papers, f, indent=2, ensure_ascii=False)
 
-        print(f"💾 Saved to: {json_path} and {md_path}")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(f"# Daily HCI/CMC Paper Brief – {date_str} (UTC)\n\n")
+            f.write(
+                "Topics: attention, cognitive offloading, generative AI, virtual reality, "
+                "advertising communication.\n\n"
+            )
+            for paper in papers:
+                f.write(f"## {paper['title']}\n")
+                f.write(f"- **Source:** {paper['source']}\n")
+                f.write(f"- **Published:** {paper.get('published', 'unknown')}\n")
+                f.write(f"- **URL:** {paper['url']}\n\n")
+                f.write(f"**Abstract**\n{paper['abstract']}\n\n")
+                f.write(f"**AI Summary**\n{paper.get('ai_summary', 'Not available')}\n\n")
+                f.write("---\n\n")
 
-    def run(self):
-        articles = self.scrape()
-        if not articles:
-            print("⚠️ No articles scraped.")
+        print(f"💾 Saved: {json_path} and {md_path}")
+
+    def run(self) -> None:
+        try:
+            papers = self.fetch_arxiv()
+        except urllib.error.URLError as exc:
+            print(f"❌ Failed to fetch arXiv API: {exc}")
             return
 
-        summarized = self.summarize_with_chatgpt(articles)
-        self.save_results(summarized)
-        print("✅ Done.")
+        if not papers:
+            print("⚠️ No papers collected.")
+            return
 
-if __name__ == '__main__':
-    scraper = ArticleScraper()
-    scraper.run()
+        papers = self.summarize(papers)
+        self.save_results(papers)
+        print("✅ Daily brief generated.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Collect and summarize HCI/CMC papers.")
+    parser.add_argument("--max-results", type=int, default=30, help="Max papers from arXiv")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    collector = PaperCollector(max_results=args.max_results)
+    collector.run()
