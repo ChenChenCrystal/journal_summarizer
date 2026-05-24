@@ -1,37 +1,34 @@
-name: Weekly Article Scraper and Summarizer
+name: Daily Paper Collector and Summarizer
 
 on:
   schedule:
-    # Runs every Monday at 9:00 AM UTC
-    - cron: '0 9 * * 1'
-  workflow_dispatch: # Allows manual triggering for testing
+    # Runs daily at 09:00 UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape-and-summarize:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        pip install requests beautifulsoup4 lxml
+      - name: Run paper collector
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4o-mini
+        run: python scraper.py --max-results 30
 
-    - name: Run article scraper
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: python scraper.py
-
-    - name: Commit and push results
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add summaries/
-        git diff --staged --quiet || git commit -m "Weekly article summaries - $(date +'%Y-%m-%d')"
-        git push
+      - name: Commit and push results
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add summaries/
+          git diff --staged --quiet || git commit -m "Daily paper summaries - $(date +'%Y-%m-%d')"
+          git push
